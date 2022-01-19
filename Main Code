@@ -1,1 +1,137 @@
+import os
+from typing import Text
+from pandas.io import json
+import tweepy as tw
+from tweepy import OAuthHandler
+from tweepy import API
+import pandas as pd
+from datetime import date, datetime
+import pytz
+import neattext.functions as nfx
+import numpy as np
+import re
+import warnings
+import seaborn as sns
+from csv import writer
+from textblob import TextBlob
+import mysql.connector
+from typing import Tuple
 
+def new_func(year, month, day):
+  Date = datetime.date(year, month, day)
+  return Date
+
+def twitterScraper(user, since_date, until_date):
+  # API Auth
+  API_Key='$$$$$$$$$$$$$$$$$$$$$$'
+  API_Secret_Key='$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$'
+  Access_Token='$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$'
+  Access_Token_Secret='$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$'
+  auth = OAuthHandler('$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$', '$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$')
+  auth.set_access_token('$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$', '$$$$$$$$$$$$$$$$$$$$$$$$$$$$')
+  api  = API(auth)
+  api = tw.API(auth, wait_on_rate_limit=True)
+
+  # Tweets Scrapping
+  username = user[2].split('/')[0].strip()
+  try:
+    TX = tw.Cursor(api.user_timeline, screen_name="@"+username, since=since_date, until=until_date, lang="en").items(10) #item iterators
+  
+    LIST_TX = [[user[0],user[1],T.user.screen_name,T.text,T.user.location] for T in TX]
+    if len(LIST_TX) ==0:
+      # raise
+      return 0, 0
+
+    T_df = pd.DataFrame(data = LIST_TX,columns=['doctorid','crmid','username','text','location'])
+    pd.set_option('max_colwidth',800)
+    return T_df, 1
+  except:
+    return 0, 0
+
+def textAnalysis(T_df):
+  # TEXT ANALYSIS OF TWEETS
+  dir(nfx)
+  T_df['text'].apply(nfx.extract_hashtags)
+  T_df['extracted_hashtags'] = T_df['text'].apply(nfx.extract_hashtags)
+  T_df[['extracted_hashtags','text']]
+  # Cleaning Text
+  T_df['clean_tweet'] = T_df['text'].apply(nfx.remove_hashtags)
+  T_df[['text','clean_tweet']]
+  # Cleaning Text: Multiple WhiteSpaces
+  T_df['clean_tweet'] = T_df['clean_tweet'].apply(nfx.remove_multiple_spaces)
+    
+  # Cleaning Text : Remove urls
+  T_df['clean_tweet'] = T_df['clean_tweet'].apply(nfx.remove_urls)
+  # Cleaning Text: Punctuations
+  T_df['clean_tweet'] = T_df['clean_tweet'].apply(nfx.remove_puncts)
+  T_df[['text','clean_tweet']]
+  # clean_tweet = T_df['clean_tweet']
+  # clean_tweet = clean_tweet.str.strip('clean_tweet')
+  return T_df
+
+def get_sentiment(text):
+  # Tweet Sentiment Analysis
+  blob = TextBlob(text)
+  sentiment_polarity = blob.sentiment.polarity
+  sentiment_subjectivity = blob.sentiment.subjectivity
+  if sentiment_polarity > 0:
+    sentiment_label = 'Positive'
+  elif sentiment_polarity < 0:
+    sentiment_label = 'Negative'
+  else:
+    sentiment_label = 'Neutral'
+  return {'polarity':sentiment_polarity, 'subjectivity':sentiment_subjectivity, 'sentiment':sentiment_label}
+
+def datastore(T_df):
+  T_df['sentiment_results'] = T_df['clean_tweet'].apply(get_sentiment)
+  pd.json_normalize(T_df['sentiment_results'])
+  T_df = T_df.join(pd.json_normalize(T_df['sentiment_results']))
+  T_df['sentiment'].value_counts()
+  return T_df
+
+def DBconnectivity():
+  con = mysql.connector.connect(
+  host="$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$", user="$$$$$$$",
+  password="$$$$$$$$$$$$$$$$$$", database="version1")
+  # create cursor object
+  cursor = con.cursor()
+  created_by = input('Input the Created_by Id for selecting the company :- ')
+  query = "select id,crmid ,twitterusername,subcompanyid FROM  tbldoctorspersonalinfo WHERE createdby ="+ created_by +" AND twitterusername IS NOT NULL AND twitterusername <> '' "
+  cursor.execute(query)
+  # Fetching Data
+  table = cursor.fetchall()
+  
+  UsersList = []
+  for tup in table:
+    user_id = tup[0]
+    crm_id = tup[1]
+    username = tup[2]
+    subcompanyid = tup[3]
+    UsersList.append([user_id,crm_id,username,subcompanyid])
+  print("DB connectivity successfull")
+  return UsersList, created_by
+    
+if __name__ == '__main__':
+  UsersList, created_by = DBconnectivity()
+  
+  # input of dates
+  since_date = input('Enter a since date in YYYY-MM-DD format')
+  until_date = input('Enter a until date in YYYY-MM-DD format')
+
+  FinalTFList = []
+  for user in UsersList:
+    print("For user", user[2])
+    
+    T_df, flag = twitterScraper(user, since_date, until_date)
+    print("Scrapping sucess\n******************************************")
+    if flag == 0:
+      continue
+    T_df = textAnalysis(T_df)
+
+    T_df = datastore(T_df)
+    T_df['since_date'], T_df['until_date'], T_df['created_by'], T_df['subcompanyid'] = since_date, until_date, created_by, user[3]
+    print(T_df.head(5))
+    FinalTFList.append(T_df)
+  
+  FinalDF = pd.concat(FinalTFList)
+  FinalDF.to_csv("TRIAL1.csv", index = False) 
